@@ -46,6 +46,7 @@ final class PiecesView: UIView {
     private(set) var pieceViews: [Coordinates: PieceView]
     
     private var isInitialSetupCompleted = false
+    private var movesInProgress = Set<Coordinates>()
     
     init(pieces: [Coordinates: PieceView]) {
         self.pieceViews = pieces
@@ -59,6 +60,11 @@ final class PiecesView: UIView {
         
     func make(move: Move, animated: Bool = true) {
         guard let pieceView = pieceViews[move.from] else {
+            return
+        }
+        
+        // Prevent concurrent animations for the same piece
+        guard !movesInProgress.contains(move.from) else {
             return
         }
          
@@ -77,6 +83,9 @@ final class PiecesView: UIView {
             return
         }
         
+        // Mark animation as in progress
+        movesInProgress.insert(move.from)
+        
         let toCenter = getSquareCenter(for: move.to)
         
         pieceAnimator.animate(
@@ -87,10 +96,6 @@ final class PiecesView: UIView {
                 pieceView.center = toCenter
             }, completion: { [weak self] _ in
                 guard let self else { return }
-
-//                guard pieceView.center != toCenter else {
-//                    return
-//                }
                 
                 pieceViews[move.to]?.removeFromSuperview()
                 pieceViews[move.to] = pieceView
@@ -101,6 +106,10 @@ final class PiecesView: UIView {
                 }
                 
                 pieceViews[move.from] = nil
+                
+                // Remove from tracking after animation completes
+                movesInProgress.remove(move.from)
+                
                 delegate?.didFinishMoveAnimation()
             }
         )
