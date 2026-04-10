@@ -96,20 +96,27 @@ final class PiecesView: UIView {
                 pieceView.center = toCenter
             }, completion: { [weak self] _ in
                 guard let self else { return }
-                
+
+                // If a full re-render happened during animation, pieceViews was replaced.
+                // Don't touch it — the re-render already set the correct state.
+                guard pieceViews[move.from] === pieceView else {
+                    movesInProgress.remove(move.from)
+                    return
+                }
+
                 pieceViews[move.to]?.removeFromSuperview()
                 pieceViews[move.to] = pieceView
                 pieceView.coordinates = move.to
-                
+
                 if let updatedImage = move.replaceImage {
                     pieceViews[move.to]?.image = isFlipped ? updatedImage.rotate(radians: .pi)! : updatedImage
                 }
-                
+
                 pieceViews[move.from] = nil
-                
+
                 // Remove from tracking after animation completes
                 movesInProgress.remove(move.from)
-                
+
                 delegate?.didFinishMoveAnimation()
             }
         )
@@ -117,6 +124,7 @@ final class PiecesView: UIView {
 
     func render(pieces: Set<Piece>) {
         if !pieces.isEmpty {
+            movesInProgress.removeAll()
             removeAllPieces()
         }
         
