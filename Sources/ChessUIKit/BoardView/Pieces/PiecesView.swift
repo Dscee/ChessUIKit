@@ -18,6 +18,12 @@ protocol PiecesViewDelegate: AnyObject {
 }
 
 final class PiecesView: UIView {
+    private struct ActiveMove {
+        let move: Move
+        weak var pieceView: PieceView?
+        let targetCenter: CGPoint
+    }
+
     var isFlipped = false {
         didSet { flip() }
     }
@@ -46,7 +52,7 @@ final class PiecesView: UIView {
     private(set) var pieceViews: [Coordinates: PieceView]
     
     private var isInitialSetupCompleted = false
-    private var movesInProgress = Set<Coordinates>()
+    private var activeMoves: [Coordinates: ActiveMove] = [:]
     
     init(pieces: [Coordinates: PieceView]) {
         self.pieceViews = pieces
@@ -59,34 +65,23 @@ final class PiecesView: UIView {
     }
         
     func make(move: Move, animated: Bool = true) {
+        finishActiveMoves(intersecting: [move.from, move.to], notify: false)
+
         guard let pieceView = pieceViews[move.from] else {
-            return
-        }
-        
-        // Prevent concurrent animations for the same piece
-        guard !movesInProgress.contains(move.from) else {
             return
         }
          
         guard animated else {
-            pieceView.center = getSquareCenter(for: move.to)
-            pieceViews[move.to]?.removeFromSuperview()
-            pieceViews[move.to] = pieceView
-            pieceView.coordinates = move.to
-            
-            if let updatedImage = move.replaceImage {
-                pieceViews[move.to]?.image = isFlipped ? updatedImage.rotate(radians: .pi)! : updatedImage
-            }
-            
-            pieceViews[move.from] = nil
-            
+            completeMove(move, pieceView: pieceView, targetCenter: getSquareCenter(for: move.to))
             return
         }
-        
-        // Mark animation as in progress
-        movesInProgress.insert(move.from)
-        
+
         let toCenter = getSquareCenter(for: move.to)
+        activeMoves[move.from] = ActiveMove(
+            move: move,
+            pieceView: pieceView,
+            targetCenter: toCenter
+        )
         
         pieceAnimator.animate(
             animations: { [weak self] in
@@ -97,36 +92,18 @@ final class PiecesView: UIView {
             }, completion: { [weak self] _ in
                 guard let self else { return }
 
-                // If a full re-render happened during animation, pieceViews was replaced.
-                // Don't touch it — the re-render already set the correct state.
-                guard pieceViews[move.from] === pieceView else {
-                    movesInProgress.remove(move.from)
+                guard activeMoves[move.from]?.pieceView === pieceView else {
                     return
                 }
 
-                pieceViews[move.to]?.removeFromSuperview()
-                pieceViews[move.to] = pieceView
-                pieceView.coordinates = move.to
-
-                if let updatedImage = move.replaceImage {
-                    pieceViews[move.to]?.image = isFlipped ? updatedImage.rotate(radians: .pi)! : updatedImage
-                }
-
-                pieceViews[move.from] = nil
-
-                // Remove from tracking after animation completes
-                movesInProgress.remove(move.from)
-
+                completeActiveMove(from: move.from)
                 delegate?.didFinishMoveAnimation()
             }
         )
     }
 
     func render(pieces: Set<Piece>) {
-        if !pieces.isEmpty {
-            movesInProgress.removeAll()
-            removeAllPieces()
-        }
+        removeAllPieces()
         
         pieces.forEach { piece in
             let pieceView = PieceView(
@@ -146,6 +123,7 @@ final class PiecesView: UIView {
     }
     
     public func removePiece(at coordinates: Coordinates) {
+        finishActiveMoves(startingAt: [coordinates], notify: false)
         pieceViews[coordinates]?.removeFromSuperview()
         pieceViews[coordinates] = nil
     }
@@ -162,11 +140,73 @@ final class PiecesView: UIView {
     }
     
     func removeAllPieces() {
+        cancelActiveMoves()
         pieceViews.removeAll()
         
         for subview in subviews where subview is PieceView {
             subview.removeFromSuperview()
         }
+    }
+
+    private func finishActiveMoves(intersecting coordinates: Set<Coordinates>, notify: Bool) {
+        let activeMoveKeys = activeMoves.compactMap { key, value -> Coordinates? in
+            let move = value.move
+            return coordinates.contains(move.from) || coordinates.contains(move.to) ? key : nil
+        }
+
+        activeMoveKeys.forEach {
+            completeActiveMove(from: $0)
+            if notify {
+                delegate?.didFinishMoveAnimation()
+            }
+        }
+    }
+
+    private func finishActiveMoves(startingAt coordinates: Set<Coordinates>, notify: Bool) {
+        let activeMoveKeys = activeMoves.compactMap { key, value -> Coordinates? in
+            coordinates.contains(value.move.from) ? key : nil
+        }
+
+        activeMoveKeys.forEach {
+            completeActiveMove(from: $0)
+            if notify {
+                delegate?.didFinishMoveAnimation()
+            }
+        }
+    }
+
+    private func completeActiveMove(from coordinates: Coordinates) {
+        guard let activeMove = activeMoves[coordinates] else { return }
+        guard let pieceView = activeMove.pieceView else {
+            activeMoves[coordinates] = nil
+            return
+        }
+
+        pieceView.layer.removeAllAnimations()
+        completeMove(
+            activeMove.move,
+            pieceView: pieceView,
+            targetCenter: activeMove.targetCenter
+        )
+        activeMoves[coordinates] = nil
+    }
+
+    private func completeMove(_ move: Move, pieceView: PieceView, targetCenter: CGPoint) {
+        pieceView.center = targetCenter
+        pieceViews[move.to]?.removeFromSuperview()
+        pieceViews[move.to] = pieceView
+        pieceView.coordinates = move.to
+
+        if let updatedImage = move.replaceImage {
+            pieceViews[move.to]?.image = isFlipped ? updatedImage.rotate(radians: .pi)! : updatedImage
+        }
+
+        pieceViews[move.from] = nil
+    }
+
+    private func cancelActiveMoves() {
+        activeMoves.values.forEach { $0.pieceView?.layer.removeAllAnimations() }
+        activeMoves.removeAll()
     }
     
     private func setupView() {
